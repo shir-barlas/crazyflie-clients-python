@@ -396,6 +396,7 @@ class MainUI(QtWidgets.QMainWindow, main_window_class):
                                           "rolemenu": sub_node},)
             node.setData((m, mux_subnodes))
 
+        self.enable_monitor()
         self._mapping_support = True
 
     def disable_input(self, disable):
@@ -839,6 +840,60 @@ class MainUI(QtWidgets.QMainWindow, main_window_class):
         self.close()
         sys.exit(0)
 
+    def enable_monitor(self):
+        import time
+        from threading import Thread
+        # from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+
+        class MonitorThread(Thread):
+            THRESHOLD = 10
+            POLL_INTERVAL = 2
+
+            def __init__(self, main):
+                super(MonitorThread, self).__init__()
+                self.main = main
+
+            def run(self):
+                def _get_flight_tab():
+                    for tab in self.main.loadedTabs:
+                        if tab.tabName == "Flight Control":
+                            return tab
+                    raise Exception("Flight tab not found")
+
+                def _reset_estimator():
+                    self.main.cf.param.set_value('kalman.resetEstimation', '1')
+                    time.sleep(0.1)
+                    self.main.cf.param.set_value('kalman.resetEstimation', '0')
+
+                while True:
+                    try:
+                        if len(Config().get("link_uri")) > 0:
+                            uri = Config().get("link_uri")
+                            break
+                    except KeyError:
+                        time.sleep(1)
+
+                print("DEBUG: URI = ".format(uri))
+                flight_tab = _get_flight_tab()
+                _reset_estimator()
+                while True:
+                    time.sleep(MonitorThread.POLL_INTERVAL)
+                    if flight_tab.actualRoll.displayText() and abs(float(flight_tab.actualRoll.displayText())) \
+                            > MonitorThread.THRESHOLD or \
+                            flight_tab.actualPitch.displayText() and abs(float(flight_tab.actualPitch.displayText())) \
+                            > MonitorThread.THRESHOLD:
+                        print("###Threshold exceeded - prepare for takeoff!###")
+                        for _ in range(10):
+                            self.main.cf.commander.send_hover_setpoint(0,0,0,0.3)
+                            time.sleep(0.1)
+                        time.sleep(1)  # try to stabilize before landing
+                        self.main.cf.commander.send_stop_setpoint()
+                        # time.sleep(0.1)
+                        break
+
+        monitor = MonitorThread(self)
+        monitor.setDaemon(True)
+        monitor.start()
 
 class ScannerThread(QThread):
 
